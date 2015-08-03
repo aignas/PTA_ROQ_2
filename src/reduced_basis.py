@@ -9,23 +9,30 @@ LOG = logging.getLogger("generator")
 
 
 class BasisGenerator(object):
-    """BasisGenerator
-    
-    This class is responsible for generating the Reduced Basis in a
-    parameter space.  This parameter space can be either a simple vector
-    space or something more complex like a waveform space.
+    """BasisGenerator is a greedy basis generator from a vector set.
+
+    This class can extract principle basis vectors from either a simple
+    vector space, or a more complex vector space defined by a template
+    function and a set of parameters.  The template functions are
+    usually useful when matching a signal in a noisy sample by use of
+    Bayesian inference of parameters.  This greedy basis generator can
+    be used in order to speed up the products between the signal
+    template and the data.
 
     """
 
     def __init__(self, parameter_space, error_threshold):
-        """TODO: to be defined1.
+        """The Basis generator object.
 
-        :s: TODO
+        :param parameter_space: A VectorSpace instance containing the
+            parameters to generate vectors in a vector space of your choice.
+        :param error_threshold: The error threshold when to stop the
+            basis generation.
 
         """
         # Save the error threshold
-        self.error_threshold = error_threshold
-        self.params = parameter_space
+        self._error_threshold = error_threshold
+        self._parameter_space = parameter_space
 
         self.__initialised = False
         self.__error = np.array([1])
@@ -36,14 +43,10 @@ class BasisGenerator(object):
         self.__grammian = None
 
 
-        index = self.params.norm.argmax()
+        index = self._parameter_space.norm.argmax()
         self.add_basis(index)
 
         self.__initialised = True
-
-    @property
-    def __grammian_inverse(self):
-        return np.linalg.inv(self.__grammian)
 
     def _compute_overlap_coefficients(self):
         """This computes the overlap coefficients and stores them.
@@ -55,17 +58,22 @@ class BasisGenerator(object):
 
         """
         coefficients = np.zeros(
-            (self.params.parameter.shape[0], 1))
+            (self._parameter_space.parameter.shape[0], 1))
 
-        basis_to_use = self.__basis[-1]
+        # Generate the basis to calculate the overlap coefficients.
+        basis_to_use = self._parameter_space.template(
+            self.__basis_indices[-1])
 
-        # Use NumPy's iterator
-        it = np.nditer(coefficients, flags=['c_index'], op_flags=['writeonly'])
-        while not it.finished:
-            it[0] = self.params.braket(
-                self.params.template(it.index), basis_to_use)
-            it.iternext()
+        # Use NumPy's iterator to calculate the overlap coefficients.
+        iterator = np.nditer(
+            coefficients, flags=['c_index'], op_flags=['writeonly'])
+        while not iterator.finished:
+            iterator[0] = self._parameter_space.inner_product(
+                self._parameter_space.template(iterator.index),
+                basis_to_use)
+            iterator.iternext()
 
+        # Add the coefficients to the list.
         if self.__overlap_coefficients is None:
             self.__overlap_coefficients = coefficients.reshape(
                 1, coefficients.size)
@@ -76,45 +84,60 @@ class BasisGenerator(object):
                 axis=0)
 
     def get_overlap_errors(self):
-        """TODO: Docstring for _compute_overlap_errors.
+        """Calculate the errors of projecting VectorSpace onto our basis.
 
-        :returns: TODO
+        This calculates the projection errors, which can then be used to
+        find the vector in the vector space which is the least well
+        represented by our basis.
+
+        The dimensions of this array should be the same as the size of
+        the parameter space.
+
+        :returns: An array containing the projection errors.
 
         """
         overlap_matrix = np.matrix(self.__overlap_coefficients)
 
         # Vectorize the error calculation function.
-        overlap_errors = np.copy(self.params.norm)
+        overlap_errors = np.copy(self._parameter_space.norm)
 
-        it = np.nditer(overlap_errors, flags=['c_index'],
-                       op_flags=['readwrite'])
-        while not it.finished:
-            it[0] = it[0] - overlap_matrix[:,it.index].transpose() * \
-                self.__grammian_inverse * overlap_matrix[:,it.index]
-            it.iternext()
+        # Calculate the overlap errors by using the overlap
+        # coefficients.
+        iterator = np.nditer(
+            overlap_errors, flags=['c_index'], op_flags=['readwrite'])
+        while not iterator.finished:
+            iterator[0] = iterator[0] - \
+                overlap_matrix[:, iterator.index].transpose() * \
+                self.__grammian_inverse * overlap_matrix[:, iterator.index]
+            iterator.iternext()
 
         return overlap_errors
 
     def add_basis(self, index):
         """Add the vector to the basis set.
 
-        This also recalculates the grammian matrix.
+        This adds a new basis vector into the list of our basis vector.
+        After the vector is added, we recalculate the overlap
+        coefficients between the basis vectors and the vectors in the
+        `VectorSpace` we are traversing.  Then we recalculate the
+        Grammian matrix so that we can calculate the errors of the
+        projection of the vectors in the `VectorSpace` onto our basis
+        set.
 
-        :arg1: TODO
-        :returns: TODO
+        :param index: The index in the `VectorSpace` in order to fetch
+            the vector by passing the index into the `template` method.
 
         """
-        vector = self.params.template(index)
-
+        # Save the indices for future use
         self.__basis_indices = np.append(self.__basis_indices, index)
-        if self.__basis is None:
-            self.__basis = vector.reshape(1, vector.size)
-        else:
-            self.__basis = np.append(
-                self.__basis,
-                vector.reshape(1, vector.size),
-                axis=0)
 
+        # Calculate the overlap_coefficients before we extend the
+        # Grammian matrix
+        self._compute_overlap_coefficients()
+
+        # Do not recalculate all of the stuff. Save the old array, and
+        # then initialise the new grammian with bigger dimensions and
+        # set the old_grammian to be the top left bit.
         new_size = self.__error.size
         old_grammian = np.copy(self.__grammian)
         self.__grammian = np.zeros((new_size, new_size))
@@ -122,25 +145,38 @@ class BasisGenerator(object):
         if old_grammian is not None:
             self.__grammian[:-1, :-1] = old_grammian
 
-        self.__grammian[-1, -1] = self.params.norm[index]
+        # The bottom-right element the norm of the latest basis
+        self.__grammian[-1, -1] = self._parameter_space.norm[index]
 
-        self._compute_overlap_coefficients()
-
+        # Go through the the bottom row and through the right-most
+        # column and just add all the elements by using the fact that
+        # the Grammian is symmetric because of the property of the
+        # inner-product in any vector space (even complex), that it is
+        # commutative.
         for i in range(new_size - 1):
             coef = self.__overlap_coefficients[-1, self.__basis_indices[i]]
             self.__grammian[-1, i] = coef
             self.__grammian[i, -1] = coef
 
-    def iterate(self):
-        """TODO: Docstring for _do_iteration.
+        # Calculate the inverse
+        self.__grammian_inverse = np.linalg.inv(self.__grammian)
 
-        :arg1: TODO
+    def iterate(self):
+        """Do a one step of iteration.
+
+        This just executes a step of iteration where it first calculates
+        the errors of projection of our vector space onto our basis set,
+        then it checks if the maximum error is bellow the error
+        threshold.  If it is not, then we find the vector, which has the
+        highest projection error and then add it into our basis set.
+
         :returns: boolean. True if the iteration was the last one.
 
         """
         overlap_errors = self.get_overlap_errors()
 
-        if overlap_errors.max() < self.error_threshold:
+        if overlap_errors.max() < self._error_threshold:
+            # We have finished iterating.
             return True
 
         index = np.argmax(overlap_errors)
@@ -148,9 +184,15 @@ class BasisGenerator(object):
 
         self.add_basis(index)
 
+        # We have not finished the calculation
+        return False
+
     def run(self, monitor=False):
-        """
-        Do the generation
+        """Run the generator.
+        
+        :param monitor: Whether to log the progress.
+
+        :returns: The basis vectors.
         """
         if monitor:
             LOG.info("The error for the computations is")
@@ -161,14 +203,29 @@ class BasisGenerator(object):
             if monitor:
                 LOG.info(self.__error[-1])
 
-        return self.__basis
+        # Generate the basis
+        return np.array([
+            self._parameter_space.template(i)
+            for i in self.__basis_indices])
 
 
 class VectorSpace(object):
-    """Docstring for ParameterSpace. """
+    """The parameter space class.
+
+    This is for representing the parameter space as a vector space with
+    it's own inner product rule.
+
+    """
 
     def __init__(self, parameters, covariance_matrix):
-        """Instansiate a parameter space, which has it's own inner product rule and the Grammian"""
+        """We instantiate the parameter space and set the covariance
+        matrix for calculating the inner product.
+
+        :param parameters: The 2D array representing the parameter space.
+        :param covariance_matrix: The matrix, which should have the same
+            dimensionality as the length of a vector returned by the
+            `template` function of this class.
+        """
 
         self.parameter = parameters
         self.__covariance_matrix = covariance_matrix
@@ -177,16 +234,18 @@ class VectorSpace(object):
         # Calculate all the norms when assigning
         for i in range(self.norm.size):
             temp = self.template(i)
-            self.norm[i] = self.braket(temp, temp)
+            self.norm[i] = self.inner_product(temp, temp)
 
     def template(self, index):
         """
         This command is given the index in the parameter space and
         it gives back the template vector.
+        
+        :param index: The index of the parameter in the parameter space.
         """
         return self.parameter[index]
 
-    def braket(self, a, b):
+    def inner_product(self, a, b):
         """ This is the definition of the inner product for some
         parameter space.  The inner product depends greatly on the
         covariance_matrix, which is passed to the class on

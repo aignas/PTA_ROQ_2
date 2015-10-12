@@ -1,6 +1,23 @@
-#!/usr/bin/python3.4
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
-# The following was copied from a Cython manual
+"""
+This file is part of the PTA_ROQ.
+
+PTA_ROQ is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+PTA_ROQ is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with PTA_ROQ.  If not, see <http://www.gnu.org/licenses/>.
+"""
+
 import numpy as np
 cos = np.cos
 sin = np.sin
@@ -97,30 +114,38 @@ def antennaPattern (theta, phi, u_p):
     ])
 
 
-def omega(double t, double omega0, double M):
+def omega(time, fundamental_frequency, effective_mass):
     """
     Define some required functions.
 
     FIXME we can probably do some approximations here and there (See the
-    Ellis et al.  paper p3).
+    Ellis et al. paper p3).
     """
-    return (omega0**(-8/3) - 256/5 * M**(5/3) * t)**(-3/8)
+    return (fundamental_frequency**(-8/3) 
+        - 256/5 * effective_mass**(5/3) * time)**(-3/8)
 
 
-def Phi (double t, double omega0, double M):
-    # FIXME the Cornell et al. paper has a constant term here. I believe, that the
-    #       constant term here should be as well, but I am wondering if the constant
-    #       term is the same as \Phi_0
-    return 1/(32 * M**(5/3)) * ( omega0**(-5/3) - omega(t, omega0, M)**(-5/3))
+def Phi (time, fundamental_frequency, effective_mass):
+    """
+    Calculate the phase term.
+
+    FIXME: the Cornell et al. paper has a constant term here.  I believe,
+    that the constant term here should be as well, but I am wondering if
+    the constant term is the same as \Phi_0.
+    """
+    return 1/(32 * effective_mass**(5/3)) * (
+        fundamental_frequency**(-5/3) 
+        - omega(time, fundamental_frequency, effective_mass)**(-5/3))
 
 
-# define the GW contributions to the timing residuals as in (12) and (13)
-# The first term is the plus, the second term is the cross as in the F function
-def gWContribution (double omega0, double M, double t, double iota, double psi,
-        double zeta, double Phi0):
+def gWContribution (omega0, M, t, iota, psi, zeta, Phi0):
+    """
+    define the GW contributions to the timing residuals as in (12) and
+    (13) The first term is the plus, the second term is the cross as in
+    the F function.
+    """
 
-    cdef double a, b
-    cdef np.ndarray gw
+    gw = np.zeros(2)
 
     a = sin( 2 * (Phi(t, omega0, M) - Phi0) ) * (1 + cos(iota)**2)
     b = cos( 2 * (Phi(t, omega0, M) - Phi0) ) * cos(iota)
@@ -132,10 +157,10 @@ def gWContribution (double omega0, double M, double t, double iota, double psi,
     return gw
 
 
-# define the coefficients amplitudes as shown in the (18)
-def amplitude(double zeta, double iota, double phi, double psi):
-    cdef np.ndarray a
-
+def amplitude(zeta, iota, phi, psi):
+    """
+    define the coefficients amplitudes as shown in the (18)
+    """
     a = np.zeros(4)
     a[0] = zeta * ( (1 + cos(iota)**2) * cos (phi) * cos (2*psi) \
                 + 2 * cos(iota) * sin (phi) * sin (2*psi) )
@@ -152,10 +177,10 @@ def amplitude(double zeta, double iota, double phi, double psi):
     return a
 
 
-# Define the time dependent basis functions as shown in the equation (19)
-def basis (double omega0, double M, double theta, double phi, double t, np.ndarray u_p):
-    cdef np.ndarray A, F
-
+def basis (omega0, M, theta, phi, t, u_p):
+    """
+    Define the time dependent basis functions as shown in the equation (19)
+    """
     A = np.zeros(4)
     F = antennaPattern(theta, phi, u_p)
     A[0] = F[0] * omega(t, omega0, M)**(-1/3) * sin (2 * Phi(t, omega0, M))
@@ -165,12 +190,10 @@ def basis (double omega0, double M, double theta, double phi, double t, np.ndarr
 
     return A
 
-# Define the pulsar term as in the eq (17)
-def pulsarTerm (double t, double M, double D, double iota, double Phi0, double psi,
-        double theta, double phi, double omega0, double L, np.ndarray u_p):
-    cdef np.ndarray F, s
-    cdef double tp, zeta
-
+def pulsarTerm (t, M, D, iota, Phi0, psi, theta, phi, omega0, L, u_p):
+    """
+    Define the pulsar term as in the eq (17)
+    """
     v = UnitVectors(theta, phi)
     tp = t - L * (1 + np.dot(v.Omega(), u_p))
     zeta = M**(5/3)/D
@@ -179,8 +202,10 @@ def pulsarTerm (double t, double M, double D, double iota, double Phi0, double p
     s = gWContribution (omega0, M, tp, iota, psi, zeta, Phi0)
     return np.dot(F,s)
 
-# Define the noise term
 def noise (double t, np.ndarray variance):
+    """
+    Define the noise term
+    """
     cdef double white, red, powerLaw
 
     # Implement the white  noise
@@ -198,8 +223,10 @@ def noise (double t, np.ndarray variance):
     # Add all the noise contributions
     return white + red + powerLaw
 
-# Define the residual as a function of parameters
 def individualSource (double t, np.ndarray params, double L, np.ndarray u_p):
+    """
+    Define the residual as a function of parameters
+    """
     cdef double M, D, iota, Phi0, psi, theta, phi, omega0, zeta, p
     cdef np.ndarray a, A
 

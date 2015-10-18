@@ -20,6 +20,7 @@ along with PTA_ROQ.  If not, see <http://www.gnu.org/licenses/>.
 
 import numpy as np
 import unittest
+from collections import namedtuple
 
 import logging
 LOG = logging.getLogger("generator")
@@ -464,6 +465,12 @@ class SpaceReduce(object):
         self.grammian_inverse = np.linalg.inv(self.grammian)
 
 
+# We use this named tuple to return the results from the generation.
+SimulationData = namedtuple(
+    "SimulationData",
+    "reduced_basis projection_error")
+
+
 def generate_reduced_basis(input_space, target_error):
     """This function generates the reduced basis
 
@@ -481,11 +488,6 @@ def generate_reduced_basis(input_space, target_error):
     for basis, error in SpaceReduce(input_space, target_error):
         errors.append(error)
         reduced_basis_space.append(basis)
-
-    from collections import namedtuple
-    # pylint: disable=invalid-name
-    SimulationData = namedtuple(
-        "SimulationData", "reduced_basis projection_error")
 
     return SimulationData(reduced_basis_space, errors)
 
